@@ -32,3 +32,4 @@ mise run serve
 | `mise run plugin` | 把 Rojo 插件装进 Studio |
 | `mise run build` | 导出 `build/place.rbxlx` |
 # G1_Roblox
+# G1_Roblox
