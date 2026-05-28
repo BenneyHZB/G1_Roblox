@@ -1,0 +1,13 @@
+{
+  "className": "Part",
+  "properties": {
+    "Name": "GoldFarmZone",
+    "Anchored": true,
+    "Size": [500, 1, 100],
+    "Position": [-29, 0.5, 297],
+    "Orientation": [0, -90, 0],
+    "Color": [0.333, 0.667, 0.333],
+    "Material": "Grass",
+    "Transparency": 0.35
+  }
+}

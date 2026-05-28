@@ -16,24 +16,33 @@ local PlayerCombat = require(script.PlayerCombat)
 local EnhanceShop = require(script.EnhanceShop)
 local TrainingGround = require(script.TrainingGround)
 local WaveDefense = require(script.WaveDefense)
+local WeaponShop = require(script.WeaponShop)
+local Tutorial = require(script.Tutorial)
 
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 
 print("[roblox-starter] Server started")
 
+local GoldFarm = require(script.GoldFarm)
+GoldFarm.sanitizeCoinTemplates()
+
 PlayerEconomy.start()
 PlayerTrophies.start()
+Tutorial.start()
 PlayerUpgrades.start()
 TrainingGround.start()
 PlayerCombat.start()
 EnhanceShop.start()
+WeaponShop.start()
+GoldFarm.start()
 WaveDefense.start()
 
 print(
-	("[roblox-starter] 波次守公主已启动：首波 %d 秒，波间 %d→%d 秒，击杀 +%d 金币"):format(
+	("[roblox-starter] 波次守公主已启动：首波 %d 秒，波间 %d→%d 秒，击杀 +%d 金币，房间上限 %d 人"):format(
 		GameConfig.FirstWaveDelay,
 		GameConfig.WaveIntermissionStart,
 		GameConfig.WaveIntermissionEnd,
-		GameConfig.GoldPerWaveEnemyKill
+		GameConfig.GoldPerWaveEnemyKill,
+		GameConfig.MaxPlayers or 4
 	)
 )

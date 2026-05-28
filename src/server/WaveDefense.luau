@@ -31,20 +31,16 @@ local SPAWN_NAME = "EnemySpawn"
 local ENEMY_TEMPLATE_NAME = "EnemyTemplate"
 local WAVE_ENEMIES_FOLDER_NAME = "WaveEnemies"
 
-local DEFAULT_WALK_ANIM = {
-	[Enum.HumanoidRigType.R15] = "rbxassetid://507777826",
-	[Enum.HumanoidRigType.R6] = "rbxassetid://180426354",
-}
-
-local DEFAULT_ATTACK_ANIM = {
-	[Enum.HumanoidRigType.R15] = "rbxassetid://522635514",
-	[Enum.HumanoidRigType.R6] = "rbxassetid://522635514",
-}
+-- 统一用 R15 动画 ID（Studio 下 R6 的 180426354 等常加载失败）
+local DEFAULT_WALK_ANIM_ID = "rbxassetid://507777826"
+local DEFAULT_ATTACK_ANIM_ID = "rbxassetid://522635514"
 
 local WaveDefense = {}
 
 -- 防止 Rojo 热更或重复 Play 导致多套波次循环同时跑
 local isRunning = false
+local restartDefenseRemote: RemoteFunction?
+local matchRoundId = 0
 
 -- 运行时缓存（setupWorld → findMapObjects 填充）
 local princessTarget: Model | BasePart
@@ -59,6 +55,7 @@ local waveCountdownValue: IntValue
 
 local activeWaveEnemies = 0
 local princessHitSoundTemplate: Sound?
+local princessHitSoundRemote: RemoteEvent?
 
 -- ---------------------------------------------------------------------------
 -- 工具函数
@@ -162,7 +159,7 @@ local function sanitizeEnemyModel(enemy: Model)
 	for _, desc in enemy:GetDescendants() do
 		if desc:IsA("Script") then
 			table.insert(toRemove, desc)
-		elseif desc:IsA("LocalScript") and desc.Name ~= "Animate" then
+		elseif desc:IsA("LocalScript") then
 			table.insert(toRemove, desc)
 		elseif desc:IsA("ModuleScript") then
 			-- NPC 模板里偶发携带 ModuleScript，也可能间接刷怪
@@ -202,6 +199,8 @@ local function clearStrayEnemies()
 	if waveEnemiesFolder then
 		waveEnemiesFolder:ClearAllChildren()
 	end
+
+	activeWaveEnemies = 0
 end
 
 -- 公主模型内部的 EnemySpawn 不算刷怪点（常是误放进 Princess.rbxm 的标记）
@@ -212,19 +211,39 @@ local function isValidSpawnPoint(part: BasePart): boolean
 	return true
 end
 
--- 调用方：createEnemyAt
-local function ensureEnemyHealth(enemy: Instance)
+local function applyWaveStatsToEnemy(enemy: Instance, stats: GameConfig.WaveEnemyStats)
+	enemy:SetAttribute("WaveNumber", stats.wave)
+	enemy:SetAttribute("MaxHealth", stats.maxHealth)
+	enemy:SetAttribute("WalkSpeed", stats.walkSpeed)
+	enemy:SetAttribute("PrincessDamagePerHit", stats.princessDamagePerHit)
+
 	if enemy:IsA("Model") then
 		local humanoid = enemy:FindFirstChildOfClass("Humanoid")
 		if humanoid then
-			humanoid.MaxHealth = GameConfig.EnemyMaxHealth
-			humanoid.Health = GameConfig.EnemyMaxHealth
+			humanoid.MaxHealth = stats.maxHealth
+			humanoid.Health = stats.maxHealth
 		else
-			enemy:SetAttribute("Health", GameConfig.EnemyMaxHealth)
+			enemy:SetAttribute("Health", stats.maxHealth)
 		end
 	else
-		enemy:SetAttribute("Health", GameConfig.EnemyMaxHealth)
+		enemy:SetAttribute("Health", stats.maxHealth)
 	end
+end
+
+local function getEnemyPrincessDamage(enemy: Instance): number
+	local dmg = enemy:GetAttribute("PrincessDamagePerHit")
+	if typeof(dmg) == "number" and dmg > 0 then
+		return dmg
+	end
+	return GameConfig.PrincessDamagePerHit
+end
+
+local function getEnemyWalkSpeed(enemy: Instance): number
+	local speed = enemy:GetAttribute("WalkSpeed")
+	if typeof(speed) == "number" and speed > 0 then
+		return speed
+	end
+	return GameConfig.EnemySpeed
 end
 
 -- 在 Model 内查找 Humanoid（含嵌套子 Model）
@@ -285,7 +304,7 @@ local function findAttackAnimation(enemy: Model, humanoid: Humanoid): Animation
 
 	local animObject = Instance.new("Animation")
 	animObject.Name = "WaveAttackAnim"
-	animObject.AnimationId = DEFAULT_ATTACK_ANIM[humanoid.RigType] or DEFAULT_ATTACK_ANIM[Enum.HumanoidRigType.R15]
+	animObject.AnimationId = DEFAULT_ATTACK_ANIM_ID
 	animObject.Parent = humanoid
 	return animObject
 end
@@ -303,11 +322,16 @@ local function playAttackAnimation(enemy: Model, humanoid: Humanoid): AnimationT
 	local animator = getAnimator(humanoid)
 	local animObject = findAttackAnimation(enemy, humanoid)
 
-	local track = animator:LoadAnimation(animObject)
-	track.Priority = Enum.AnimationPriority.Action
-	track.Looped = false
-	track:Play()
-	attackTracks[enemy] = track
+	local ok, track = pcall(function()
+		local loaded = animator:LoadAnimation(animObject)
+		loaded.Priority = Enum.AnimationPriority.Action
+		loaded.Looped = false
+		loaded:Play()
+		return loaded
+	end)
+	if ok and track then
+		attackTracks[enemy] = track
+	end
 	return track
 end
 
@@ -334,19 +358,27 @@ local function bindWalkAnimation(enemy: Model)
 	if not animObject then
 		animObject = Instance.new("Animation")
 		animObject.Name = "WaveWalkAnim"
-		animObject.AnimationId = DEFAULT_WALK_ANIM[humanoid.RigType] or DEFAULT_WALK_ANIM[Enum.HumanoidRigType.R15]
+		animObject.AnimationId = DEFAULT_WALK_ANIM_ID
 		animObject.Parent = humanoid
 	end
 
-	local track = animator:LoadAnimation(animObject)
-	track.Looped = true
-	track.Priority = Enum.AnimationPriority.Movement
+	local ok, track = pcall(function()
+		local loaded = animator:LoadAnimation(animObject)
+		loaded.Looped = true
+		loaded.Priority = Enum.AnimationPriority.Movement
+		return loaded
+	end)
+	if not ok or not track then
+		return
+	end
 	walkTracks[enemy] = track
 
 	humanoid.Running:Connect(function(speed)
 		if speed > 0.1 then
 			if not track.IsPlaying then
-				track:Play()
+				pcall(function()
+					track:Play()
+				end)
 			end
 		elseif track.IsPlaying then
 			track:Stop()
@@ -408,7 +440,7 @@ local function validateEnemyTemplate(template: Instance)
 end
 -- Humanoid 走路模式（调用前需已 Parent 且 placeEnemyAt 已完成）
 -- 调用方：createEnemyAt
-local function setupHumanoidEnemy(enemy: Model): boolean
+local function setupHumanoidEnemy(enemy: Model, walkSpeed: number): boolean
 	if not canUseHumanoidMovement(enemy) then
 		return false
 	end
@@ -423,7 +455,7 @@ local function setupHumanoidEnemy(enemy: Model): boolean
 	humanoid.PlatformStand = false
 	humanoid.Sit = false
 	humanoid.AutoRotate = true
-	humanoid.WalkSpeed = GameConfig.EnemySpeed
+	humanoid.WalkSpeed = walkSpeed
 
 	-- 服务端 NPC 由服务器模拟，避免 MoveTo 不生效
 	root:SetNetworkOwner(nil)
@@ -532,50 +564,120 @@ local function getPrincessSoundParent(): Instance
 	return princessTarget
 end
 
-local function setupPrincessHitSound()
-	local soundName = GameConfig.PrincessHitSoundName or "PrincessHit"
+local function isUsableSoundId(soundId: string): boolean
+	if soundId == "" or soundId == "rbxassetid://0" then
+		return false
+	end
+	return soundId:find("rbxassetid://") ~= nil or soundId:find("^%d+$") ~= nil
+end
 
-	local existing = princessTarget:FindFirstChild(soundName, true)
-	if existing and existing:IsA("Sound") then
-		princessHitSoundTemplate = existing
-		existing.Looped = false
-		existing.Playing = false
-		print("[WaveDefense] 公主受击音效:", existing:GetFullName())
+local function findPrincessHitSoundInstance(): Sound?
+	local soundName = GameConfig.PrincessHitSoundName or "PrincessHit"
+	for _, desc in princessTarget:GetDescendants() do
+		if desc:IsA("Sound") and desc.Name == soundName then
+			return desc
+		end
+	end
+	return nil
+end
+
+local function applyPrincessHitSoundDefaults(sound: Sound)
+	sound.Looped = false
+	sound.Playing = false
+	sound.Volume = GameConfig.PrincessHitSoundVolume or sound.Volume
+	if sound.Volume <= 0 then
+		sound.Volume = 0.65
+	end
+end
+
+local function ensurePrincessHitRemote()
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	if not remotes then
+		remotes = Instance.new("Folder")
+		remotes.Name = "Remotes"
+		remotes.Parent = ReplicatedStorage
+	end
+
+	princessHitSoundRemote = remotes:FindFirstChild("PrincessHitSound") :: RemoteEvent?
+	if not princessHitSoundRemote then
+		princessHitSoundRemote = Instance.new("RemoteEvent")
+		princessHitSoundRemote.Name = "PrincessHitSound"
+		princessHitSoundRemote.Parent = remotes
+	end
+end
+
+local function setupPrincessHitSound()
+	ensurePrincessHitRemote()
+
+	local soundName = GameConfig.PrincessHitSoundName or "PrincessHit"
+	local existing = findPrincessHitSoundInstance()
+	if existing then
+		if not isUsableSoundId(existing.SoundId) then
+			warn(
+				("[WaveDefense] 找到 Sound「%s」但 SoundId 为空或无效（当前: %q），请在 Studio 里填 rbxassetid://"):format(
+					soundName,
+					existing.SoundId
+				)
+			)
+		else
+			applyPrincessHitSoundDefaults(existing)
+			princessHitSoundTemplate = existing
+			print("[WaveDefense] 公主受击音效:", existing:GetFullName(), existing.SoundId)
+		end
 		return
 	end
 
 	local soundId = GameConfig.PrincessHitSoundId
-	if typeof(soundId) ~= "string" or soundId == "" then
-		warn(
-			("[WaveDefense] 未找到公主受击 Sound「%s」，请在公主模型里插入 Sound，或设置 GameConfig.PrincessHitSoundId"):format(
-				soundName
-			)
-		)
+	if typeof(soundId) == "string" and soundId ~= "" and isUsableSoundId(soundId) then
+		local parent = getPrincessSoundParent()
+		local sound = Instance.new("Sound")
+		sound.Name = "PrincessHitSoundTemplate"
+		sound.SoundId = soundId
+		applyPrincessHitSoundDefaults(sound)
+		sound.Parent = parent
+		princessHitSoundTemplate = sound
+		print("[WaveDefense] 公主受击音效（配置 ID）:", soundId)
 		return
 	end
 
-	local parent = getPrincessSoundParent()
-	local sound = Instance.new("Sound")
-	sound.Name = "PrincessHitSoundTemplate"
-	sound.SoundId = soundId
-	sound.Volume = GameConfig.PrincessHitSoundVolume or 0.65
-	sound.RollOffMinDistance = 8
-	sound.RollOffMaxDistance = 120
-	sound.Parent = parent
-	princessHitSoundTemplate = sound
-	print("[WaveDefense] 公主受击音效（配置 ID）:", soundId)
+	warn(
+		("[WaveDefense] 未找到公主受击 Sound「%s」。请在公主模型内添加 Sound 并填写 SoundId，或设置 GameConfig.PrincessHitSoundId"):format(
+			soundName
+		)
+	)
 end
 
 local function playPrincessHitSound()
+	-- 受击音在客户端播放更稳定（服务端 Play 常因未加载或距离导致听不到）
+	if princessHitSoundRemote then
+		princessHitSoundRemote:FireAllClients()
+		return
+	end
+
 	if not princessHitSoundTemplate or not princessHitSoundTemplate.Parent then
+		return
+	end
+	if not isUsableSoundId(princessHitSoundTemplate.SoundId) then
 		return
 	end
 
 	local sound = princessHitSoundTemplate:Clone()
-	sound.Parent = princessHitSoundTemplate.Parent
-	sound:Play()
-	sound.Ended:Once(function()
-		sound:Destroy()
+	applyPrincessHitSoundDefaults(sound)
+	local SoundService = game:GetService("SoundService")
+	sound.Parent = SoundService
+	task.spawn(function()
+		local deadline = os.clock() + 8
+		while not sound.IsLoaded and os.clock() < deadline do
+			task.wait(0.05)
+		end
+		if sound.Parent and sound.IsLoaded then
+			sound:Play()
+			sound.Ended:Once(function()
+				sound:Destroy()
+			end)
+		else
+			sound:Destroy()
+		end
 	end)
 end
 
@@ -754,7 +856,7 @@ local function runHumanoidPrincessAttack(enemy: Model, humanoid: Humanoid)
 
 			task.wait(GameConfig.EnemyAttackWindup)
 			if enemy.Parent and princessHpValue.Value > 0 then
-				damagePrincess(GameConfig.PrincessDamagePerHit)
+				damagePrincess(getEnemyPrincessDamage(enemy))
 			end
 
 			local rest = GameConfig.EnemyAttackCooldown - GameConfig.EnemyAttackWindup
@@ -774,7 +876,7 @@ local function runSlidePrincessAttack(enemy: Model | BasePart)
 			if getDistanceToPrincess(enemy) > GameConfig.EnemyReachDistance then
 				break
 			end
-			damagePrincess(GameConfig.PrincessDamagePerHit)
+			damagePrincess(getEnemyPrincessDamage(enemy))
 			task.wait(GameConfig.EnemyAttackCooldown)
 		end
 	end)
@@ -824,7 +926,7 @@ local function runSlideMovement(enemy: Model | BasePart)
 			return
 		end
 
-		moveTo(enemy, enemyPos + toPrincess.Unit * GameConfig.EnemySpeed * dt)
+		moveTo(enemy, enemyPos + toPrincess.Unit * getEnemyWalkSpeed(enemy) * dt)
 	end)
 end
 
@@ -892,15 +994,16 @@ end
 
 -- 在指定刷怪点 CFrame 克隆敌人
 -- 调用方：spawnWaveEnemy
-local function createEnemyAt(spawnPoint: BasePart): (Model | BasePart, boolean)
+local function createEnemyAt(spawnPoint: BasePart, waveNumber: number): (Model | BasePart, boolean)
 	local spawnCFrame = getSpawnCFrame(spawnPoint)
+	local stats = GameConfig.getWaveEnemyStats(waveNumber)
 
 	local enemy = enemyTemplate:Clone()
 	enemy.Name = "WaveEnemy"
 	enemy:SetAttribute("IsWaveEnemy", true)
 	enemy:SetAttribute("SpawnPointName", spawnPoint:GetFullName())
 
-	ensureEnemyHealth(enemy)
+	applyWaveStatsToEnemy(enemy, stats)
 
 	if enemy:IsA("Model") then
 		sanitizeEnemyModel(enemy)
@@ -912,7 +1015,7 @@ local function createEnemyAt(spawnPoint: BasePart): (Model | BasePart, boolean)
 
 	local usesHumanoid = false
 	if enemy:IsA("Model") then
-		usesHumanoid = setupHumanoidEnemy(enemy)
+		usesHumanoid = setupHumanoidEnemy(enemy, stats.walkSpeed)
 		if not usesHumanoid then
 			prepareSlideEnemy(enemy)
 		end
@@ -940,8 +1043,13 @@ local function spawnWaveEnemy()
 		return
 	end
 
+	local waveNumber = waveNumberValue.Value
+	if waveNumber < 1 then
+		waveNumber = 1
+	end
+
 	local spawnPoint = spawnPoints[math.random(1, #spawnPoints)]
-	local enemy, usesHumanoid = createEnemyAt(spawnPoint)
+	local enemy, usesHumanoid = createEnemyAt(spawnPoint, waveNumber)
 
 	if usesHumanoid and enemy:IsA("Model") then
 		runHumanoidMovement(enemy)
@@ -989,7 +1097,16 @@ local function runWave(waveNumber: number): boolean
 	waveNumberValue.Value = waveNumber
 
 	local enemyCount = getWaveEnemyCount(waveNumber)
-	print(("[WaveDefense] 第 %d 波开始，敌人数量 %d"):format(waveNumber, enemyCount))
+	local waveStats = GameConfig.getWaveEnemyStats(waveNumber)
+	print(
+		("[WaveDefense] 第 %d 波开始，敌人 %d 只 | HP %d 移速 %.1f 打公主 %.1f/刀"):format(
+			waveNumber,
+			enemyCount,
+			waveStats.maxHealth,
+			waveStats.walkSpeed,
+			waveStats.princessDamagePerHit
+		)
+	)
 
 	for _ = 1, enemyCount do
 		if princessHpValue.Value <= 0 then
@@ -1017,17 +1134,67 @@ end
 -- 对外入口
 -- ---------------------------------------------------------------------------
 
+-- 新一局：清怪、满血、波次归零、进入开局倒计时
+local function resetRoundState()
+	clearStrayEnemies()
+
+	local maxHp = GameConfig.PrincessMaxHp + computePrincessMaxHpBonus()
+	princessMaxHpValue.Value = maxHp
+	princessHpValue.Value = maxHp
+	waveNumberValue.Value = 0
+	waveCountdownValue.Value = GameConfig.FirstWaveDelay
+	wavePhaseValue.Value = "Intermission"
+end
+
+local function enforceMaxPlayers()
+	local maxPlayers = GameConfig.MaxPlayers or 4
+
+	local function check(player: Player)
+		if #Players:GetPlayers() > maxPlayers then
+			player:Kick(("房间已满（最多 %d 人，请开新服或等好友退出）"):format(maxPlayers))
+		end
+	end
+
+	for _, player in Players:GetPlayers() do
+		check(player)
+	end
+
+	Players.PlayerAdded:Connect(check)
+end
+
+local function ensureRestartRemote()
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	if not remotes then
+		remotes = Instance.new("Folder")
+		remotes.Name = "Remotes"
+		remotes.Parent = ReplicatedStorage
+	end
+
+	restartDefenseRemote = remotes:FindFirstChild("RestartDefense") :: RemoteFunction?
+	if not restartDefenseRemote then
+		restartDefenseRemote = Instance.new("RemoteFunction")
+		restartDefenseRemote.Name = "RestartDefense"
+		restartDefenseRemote.Parent = remotes
+	end
+end
+
+function WaveDefense.requestRestart(player: Player): (boolean, string)
+	if not princessHpValue or wavePhaseValue.Value ~= "Defeated" then
+		return false, "公主尚未失守，无需重开"
+	end
+
+	print(("[WaveDefense] %s 请求重开新一轮（清零进度，保留奖杯）"):format(player.Name))
+	require(script.Parent.PlayerReset).resetAllPlayers()
+	WaveDefense.recalculatePrincessMaxHp()
+	matchRoundId += 1
+	return true, "已清零并重开（奖杯保留）"
+end
+
 -- 调用方：start（先执行一次）
 function WaveDefense.setupWorld()
 	ensureGameState()
 	waveEnemiesFolder = ensureWaveEnemiesFolder()
-	clearStrayEnemies()
-
-	princessMaxHpValue.Value = GameConfig.PrincessMaxHp + computePrincessMaxHpBonus()
-	princessHpValue.Value = princessMaxHpValue.Value
-	waveNumberValue.Value = 0
-	waveCountdownValue.Value = GameConfig.FirstWaveDelay
-	wavePhaseValue.Value = "Intermission"
+	resetRoundState()
 
 	findMapObjects()
 	setupPrincessHitSound()
@@ -1053,18 +1220,36 @@ function WaveDefense.start()
 	isRunning = true
 
 	WaveDefense.setupWorld()
+	enforceMaxPlayers()
+	ensureRestartRemote()
+
+	restartDefenseRemote.OnServerInvoke = function(player: Player)
+		return WaveDefense.requestRestart(player)
+	end
 
 	task.spawn(function()
-		local waveNumber = 0
+		while true do
+			resetRoundState()
+			local waitRestartId = matchRoundId
 
-		while princessHpValue.Value > 0 do
-			waveNumber += 1
-			local waitSec = getIntermissionBeforeWave(waveNumber)
-			if not runIntermission(waitSec) then
-				break
+			local waveNumber = 0
+			while princessHpValue.Value > 0 do
+				waveNumber += 1
+				local waitSec = getIntermissionBeforeWave(waveNumber)
+				if not runIntermission(waitSec) then
+					break
+				end
+				if not runWave(waveNumber) then
+					break
+				end
 			end
-			if not runWave(waveNumber) then
-				break
+
+			wavePhaseValue.Value = "Defeated"
+			waveCountdownValue.Value = 0
+			print("[WaveDefense] 公主失守，等待玩家点击「重新开始」")
+
+			while wavePhaseValue.Value == "Defeated" and matchRoundId == waitRestartId do
+				task.wait(0.2)
 			end
 		end
 	end)

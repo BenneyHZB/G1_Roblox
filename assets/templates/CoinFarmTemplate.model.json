@@ -1,0 +1,12 @@
+{
+  "className": "Part",
+  "properties": {
+    "Name": "CoinFarmTemplate",
+    "Shape": "Ball",
+    "Size": [1.4, 1.4, 1.4],
+    "Color": [1, 0.85, 0.1],
+    "Material": "Neon",
+    "Anchored": true,
+    "CanCollide": false
+  }
+}

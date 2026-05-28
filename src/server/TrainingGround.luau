@@ -295,6 +295,13 @@ local function respawnActiveDummy(player: Player)
 	end
 end
 
+function TrainingGround.resetPlayer(player: Player)
+	clearPlayerDummy(player)
+	player:SetAttribute("TrainingMaxUnlocked", 1)
+	player:SetAttribute("TrainingHighestBeaten", 0)
+	player:SetAttribute("TrainingActiveLevel", nil)
+end
+
 function TrainingGround.getLevelStats(level: number): { hp: number, trophies: number }
 	return TrainingUtil.getLevelStats(level)
 end

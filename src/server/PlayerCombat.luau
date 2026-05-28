@@ -1,7 +1,7 @@
 -- ============================================================================
 -- PlayerCombat（玩家攻击 · 服务端）
 --
--- 动画：Tool 自带 LocalScript，本模块不管
+-- 动画 / 挥砍音：客户端 Combat.client（武器脚本会被 disableToolScripts 关掉）
 -- 伤害：GameConfig.WeaponStats[Tool.Name] 或 Tool Attribute，不用武器脚本里的伤害
 -- ============================================================================
 
@@ -113,13 +113,36 @@ local function neutralizeToolDamage(tool: Tool)
 	end
 end
 
+-- Toolbox 武器自带 Script 会额外结算伤害；统一关掉，只走本模块 + GameConfig
+local function disableToolScripts(tool: Tool)
+	for _, desc in tool:GetDescendants() do
+		if desc:IsA("Script") or desc:IsA("LocalScript") then
+			desc.Enabled = false
+		end
+	end
+end
+
 local function bindCombatTool(tool: Tool)
+	disableToolScripts(tool)
 	neutralizeToolDamage(tool)
 	tool.DescendantAdded:Connect(function(desc)
-		if (desc:IsA("NumberValue") or desc:IsA("IntValue")) and TOOL_DAMAGE_VALUE_NAMES[desc.Name] then
+		if desc:IsA("Script") or desc:IsA("LocalScript") then
+			desc.Enabled = false
+		elseif (desc:IsA("NumberValue") or desc:IsA("IntValue")) and TOOL_DAMAGE_VALUE_NAMES[desc.Name] then
 			desc.Value = 0
 		end
 	end)
+end
+
+-- 武器店发放前调用：关脚本 + 确保有 Handle（否则无法装备）
+function PlayerCombat.prepareGrantedTool(tool: Tool): (boolean, string?)
+	local WeaponUtil = require(ReplicatedStorage.Shared.WeaponUtil)
+	bindCombatTool(tool)
+	if not WeaponUtil.ensureHandle(tool) then
+		return false, "武器模型缺少 Handle（Part），无法装备"
+	end
+	tool.CanBeDropped = true
+	return true, nil
 end
 
 local function watchPlayerTools(player: Player)
@@ -269,7 +292,8 @@ local function damageEnemy(player: Player, enemy: Instance, damage: number, atta
 
 	local health = enemy:GetAttribute("Health")
 	if typeof(health) ~= "number" then
-		health = GameConfig.EnemyMaxHealth
+		local maxHp = enemy:GetAttribute("MaxHealth")
+		health = if typeof(maxHp) == "number" then maxHp else GameConfig.EnemyMaxHealth
 	end
 
 	health -= damage

@@ -40,10 +40,6 @@ function PlayerUpgrades.getCost(player: Player, upgradeId: string): number?
 	end
 
 	local level = PlayerUpgrades.getLevel(player, upgradeId)
-	if level >= cfg.MaxLevel then
-		return nil
-	end
-
 	return math.floor(cfg.BaseCost * (cfg.CostMultiplier ^ level))
 end
 
@@ -71,6 +67,17 @@ function PlayerUpgrades.getBonuses(player: Player): {
 	end
 
 	return bonuses
+end
+
+function PlayerUpgrades.resetPlayer(player: Player)
+	for upgradeId in GameConfig.ShopUpgrades do
+		player:SetAttribute(getAttributeName(upgradeId), 0)
+	end
+	player:SetAttribute("PrincessHealReadyAt", nil)
+
+	if player.Character then
+		PlayerUpgrades.applyToCharacter(player, player.Character)
+	end
 end
 
 function PlayerUpgrades.applyToCharacter(player: Player, character: Model)
@@ -124,10 +131,6 @@ function PlayerUpgrades.purchase(player: Player, upgradeId: string): (boolean, s
 	end
 
 	local level = PlayerUpgrades.getLevel(player, upgradeId)
-	if level >= cfg.MaxLevel then
-		return false, "已满级"
-	end
-
 	local cost = PlayerUpgrades.getCost(player, upgradeId)
 	if not cost then
 		return false, "无法购买"

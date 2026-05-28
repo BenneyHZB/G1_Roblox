@@ -33,9 +33,6 @@ local function getCost(upgradeId: string): number?
 		return nil
 	end
 	local level = getLevel(upgradeId)
-	if level >= cfg.MaxLevel then
-		return nil
-	end
 	return math.floor(cfg.BaseCost * (cfg.CostMultiplier ^ level))
 end
 
@@ -52,18 +49,13 @@ local function refreshRow(upgradeId: string)
 
 	local level = getLevel(upgradeId)
 	local cost = getCost(upgradeId)
-	local atMax = level >= cfg.MaxLevel
 
-	row.infoLabel.Text = if atMax
-		then ("%s  Lv.%d / %d  （已满级）"):format(cfg.DisplayName, level, cfg.MaxLevel)
-		else ("%s  Lv.%d / %d  —  %d 金币"):format(cfg.DisplayName, level, cfg.MaxLevel, cost or 0)
+	row.infoLabel.Text = ("%s  Lv.%d  —  下一级 %d 金币"):format(cfg.DisplayName, level, cost or 0)
 
-	row.buyButton.Text = if atMax then "已满" else "购买"
-	row.buyButton.Active = not atMax
-	row.buyButton.AutoButtonColor = not atMax
-	row.buyButton.BackgroundColor3 = if atMax
-		then Color3.fromRGB(70, 70, 70)
-		else Color3.fromRGB(45, 120, 70)
+	row.buyButton.Text = "购买"
+	row.buyButton.Active = true
+	row.buyButton.AutoButtonColor = true
+	row.buyButton.BackgroundColor3 = Color3.fromRGB(45, 120, 70)
 end
 
 local function getHealCooldownRemaining(): number

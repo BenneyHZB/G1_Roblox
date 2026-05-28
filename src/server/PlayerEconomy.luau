@@ -40,6 +40,13 @@ function PlayerEconomy.setupPlayer(player: Player)
 			gold.Value = legacyGold.Value
 			legacyGold:Destroy()
 		end
+
+		-- Toolbox Coin 脚本用 Coins；若残留则合并后删除，避免与 PlayerData.Gold 双轨
+		local legacyCoins = leaderstats:FindFirstChild("Coins")
+		if legacyCoins and legacyCoins:IsA("IntValue") then
+			gold.Value = math.max(gold.Value, legacyCoins.Value)
+			legacyCoins:Destroy()
+		end
 	end
 end
 
@@ -50,10 +57,21 @@ function PlayerEconomy.addGold(player: Player, amount: number)
 
 	local gold = ensureGold(player)
 	gold.Value += amount
+
+	-- 防止 Coin 自带脚本仍写入 leaderstats.Coins 导致不同步（脚本应已被 GoldFarm 移除）
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local legacyCoins = leaderstats and leaderstats:FindFirstChild("Coins")
+	if legacyCoins and legacyCoins:IsA("IntValue") then
+		legacyCoins:Destroy()
+	end
 end
 
 function PlayerEconomy.getGold(player: Player): number
 	return ensureGold(player).Value
+end
+
+function PlayerEconomy.resetPlayer(player: Player)
+	ensureGold(player).Value = GameConfig.StartingGold
 end
 
 function PlayerEconomy.trySpendGold(player: Player, amount: number): boolean

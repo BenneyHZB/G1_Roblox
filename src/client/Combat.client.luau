@@ -58,9 +58,9 @@ local function findToolAnimation(tool: Tool): Animation?
 	return nil
 end
 
-local function toolHasLocalScript(tool: Tool): boolean
+local function toolHasActiveLocalScript(tool: Tool): boolean
 	for _, desc in tool:GetDescendants() do
-		if desc:IsA("LocalScript") then
+		if desc:IsA("LocalScript") and desc.Enabled then
 			return true
 		end
 	end
@@ -68,18 +68,15 @@ local function toolHasLocalScript(tool: Tool): boolean
 end
 
 local function shouldUseBuiltInToolAnim(tool: Tool): boolean
-	if tool:GetAttribute("HasBuiltInAnim") == true then
-		return true
-	end
 	if tool:GetAttribute("UseFallbackAnim") == true then
 		return false
 	end
-	if tool:GetAttribute("UseFallbackAnim") == false then
-		return true
+	if tool:GetAttribute("HasBuiltInAnim") == true then
+		return toolHasActiveLocalScript(tool)
 	end
 
-	-- 只有「脚本 + Animation 都有」才认为武器自带动画完整，否则走兜底
-	return toolHasLocalScript(tool) and findToolAnimation(tool) ~= nil
+	-- 仅当 LocalScript 仍在运行时才交给武器自带逻辑（Studio 里禁用脚本后走兜底）
+	return toolHasActiveLocalScript(tool) and findToolAnimation(tool) ~= nil
 end
 
 local function getConfiguredAnim(tool: Tool): (Animation, number)
@@ -163,6 +160,40 @@ local function playAnimTrack(humanoid: Humanoid, anim: Animation, speed: number)
 	scheduleTrackStop(track, speed)
 end
 
+local function playWeaponSounds(tool: Tool)
+	local weaponStats = GameConfig.WeaponStats[tool.Name]
+	local configSoundId = weaponStats and weaponStats.SwingSoundId
+	if typeof(configSoundId) ~= "string" or configSoundId == "" then
+		configSoundId = GameConfig.FallbackWeaponSwingSoundId
+	end
+
+	local played = false
+	for _, desc in tool:GetDescendants() do
+		if desc:IsA("Sound") and desc.SoundId ~= "" then
+			local sound = desc:Clone()
+			sound.Parent = desc.Parent
+			sound:Play()
+			sound.Ended:Once(function()
+				sound:Destroy()
+			end)
+			played = true
+		end
+	end
+
+	if not played and typeof(configSoundId) == "string" and configSoundId ~= "" then
+		local handle = tool:FindFirstChild("Handle")
+		local parent = if handle and handle:IsA("BasePart") then handle else tool
+		local sound = Instance.new("Sound")
+		sound.SoundId = configSoundId
+		sound.Volume = GameConfig.FallbackWeaponSwingSoundVolume or 0.5
+		sound.Parent = parent
+		sound:Play()
+		sound.Ended:Once(function()
+			sound:Destroy()
+		end)
+	end
+end
+
 local function playWeaponAnimation(tool: Tool)
 	local humanoid = getHumanoid()
 	if not humanoid then
@@ -170,10 +201,6 @@ local function playWeaponAnimation(tool: Tool)
 	end
 
 	if shouldUseBuiltInToolAnim(tool) then
-		local toolAnim = findToolAnimation(tool)
-		if toolAnim and not toolHasLocalScript(tool) then
-			playAnimTrack(humanoid, toolAnim, GameConfig.FallbackWeaponAnimSpeed)
-		end
 		return
 	end
 
@@ -198,6 +225,7 @@ local function bindTool(tool: Tool)
 
 	tool.Activated:Connect(function()
 		playWeaponAnimation(tool)
+		playWeaponSounds(tool)
 		requestAttack()
 	end)
 
