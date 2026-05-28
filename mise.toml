@@ -1,0 +1,16 @@
+min_version = "2024.1.0"
+
+[tools]
+"github:rojo-rbx/rojo" = "7.6.1"
+
+[tasks.serve]
+description = "Start Rojo sync server for Roblox Studio"
+run = "rojo serve"
+
+[tasks.build]
+description = "Build place file from project"
+run = "rojo build -o build/place.rbxlx"
+
+[tasks.plugin]
+description = "Install Rojo plugin into Roblox Studio"
+run = "rojo plugin install"
