@@ -10,6 +10,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 local PlayerEconomy = require(script.Parent.PlayerEconomy)
+local PlayerUpgrades = require(script.Parent.PlayerUpgrades)
+local TrainingGround = require(script.Parent.TrainingGround)
 
 local PlayerCombat = {}
 
@@ -58,6 +60,10 @@ local function getEnemyRoot(enemy: Instance): BasePart?
 end
 
 local function applyHitFeedback(enemy: Instance, attackerRoot: BasePart)
+	if enemy:GetAttribute("IsTrainingDummy") then
+		return
+	end
+
 	local root = getEnemyRoot(enemy)
 	if not root then
 		return
@@ -144,7 +150,7 @@ local function watchPlayerTools(player: Player)
 	watchContainer(backpack)
 end
 
-local function getPlayerAttackStats(character: Model): (number, number, number)
+local function getPlayerAttackStats(player: Player, character: Model): (number, number, number)
 	local tool = getEquippedTool(character)
 	if not tool then
 		return GameConfig.AttackDamage, GameConfig.AttackRange, GameConfig.AttackCooldown
@@ -167,7 +173,31 @@ local function getPlayerAttackStats(character: Model): (number, number, number)
 		cooldown = weaponStats and weaponStats.Cooldown or GameConfig.ToolAttackCooldown
 	end
 
+	local bonuses = PlayerUpgrades.getBonuses(player)
+	damage += bonuses.damage
+	range += bonuses.attackRange
+
 	return damage, range, cooldown
+end
+
+local function findNearestTrainingDummy(player: Player, origin: Vector3, maxRange: number): Instance?
+	local nearest: Instance? = nil
+	local nearestDistance = maxRange
+
+	for _, inst in workspace:GetDescendants() do
+		if inst:GetAttribute("IsTrainingDummy") and inst:GetAttribute("OwnerUserId") == player.UserId then
+			local pos = getEnemyPosition(inst)
+			if pos then
+				local distance = (pos - origin).Magnitude
+				if distance <= nearestDistance then
+					nearestDistance = distance
+					nearest = inst
+				end
+			end
+		end
+	end
+
+	return nearest
 end
 
 local function findNearestWaveEnemy(origin: Vector3, maxRange: number): Instance?
@@ -190,11 +220,32 @@ local function findNearestWaveEnemy(origin: Vector3, maxRange: number): Instance
 	return nearest
 end
 
+local function findAttackTarget(player: Player, origin: Vector3, maxRange: number): Instance?
+	local dummy = findNearestTrainingDummy(player, origin, maxRange)
+	if dummy then
+		return dummy
+	end
+	return findNearestWaveEnemy(origin, maxRange)
+end
+
 local function awardKill(player: Player, enemy: Instance)
 	if enemy:GetAttribute("KillRewarded") then
 		return
 	end
 	enemy:SetAttribute("KillRewarded", true)
+
+	if enemy:GetAttribute("IsTrainingDummy") then
+		if enemy:GetAttribute("OwnerUserId") ~= player.UserId then
+			return
+		end
+		local level = enemy:GetAttribute("DummyLevel")
+		local trophies = enemy:GetAttribute("TrophyReward")
+		if typeof(level) == "number" and typeof(trophies) == "number" then
+			TrainingGround.recordVictory(player, level, trophies)
+		end
+		return
+	end
+
 	PlayerEconomy.addGold(player, GameConfig.GoldPerWaveEnemyKill)
 end
 
@@ -241,7 +292,7 @@ local function onAttack(player: Player)
 		return
 	end
 
-	local damage, range, cooldown = getPlayerAttackStats(character)
+	local damage, range, cooldown = getPlayerAttackStats(player, character)
 
 	local now = os.clock()
 	local last = lastAttackAt[player] or 0
@@ -250,7 +301,7 @@ local function onAttack(player: Player)
 	end
 	lastAttackAt[player] = now
 
-	local enemy = findNearestWaveEnemy(root.Position, range)
+	local enemy = findAttackTarget(player, root.Position, range)
 	if enemy then
 		damageEnemy(player, enemy, damage, root)
 	end

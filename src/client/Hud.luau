@@ -42,22 +42,27 @@ function Hud.create()
 	local princessLabel = createLabel(screenGui, "PrincessHpLabel", 16)
 	local waveLabel = createLabel(screenGui, "WaveLabel", 64)
 	local goldLabel = createLabel(screenGui, "GoldLabel", 112)
+	local trophyLabel = createLabel(screenGui, "TrophyLabel", 152)
+	trophyLabel.TextColor3 = Color3.fromRGB(255, 215, 100)
 
 	local gameState = ReplicatedStorage:WaitForChild("GameState")
 	local princessHp = gameState:WaitForChild("PrincessHp") :: IntValue
+	local princessMaxHp = gameState:WaitForChild("PrincessMaxHp") :: IntValue
 	local waveNumber = gameState:WaitForChild("WaveNumber") :: IntValue
 	local wavePhase = gameState:WaitForChild("WavePhase") :: StringValue
 	local waveCountdown = gameState:WaitForChild("WaveCountdown") :: IntValue
 
+	local playerData = player:WaitForChild("PlayerData")
+	local gold = playerData:WaitForChild("Gold") :: IntValue
 	local leaderstats = player:WaitForChild("leaderstats")
-	local gold = leaderstats:WaitForChild("Gold") :: IntValue
+	local trophies = leaderstats:WaitForChild("Trophies") :: IntValue
 
 	local function refreshPrincess()
 		if princessHp.Value <= 0 then
 			princessLabel.Text = "公主 HP: 0  —  已失守"
 			princessLabel.TextColor3 = Color3.fromRGB(255, 90, 90)
 		else
-			princessLabel.Text = ("公主 HP: %d / %d"):format(princessHp.Value, GameConfig.PrincessMaxHp)
+			princessLabel.Text = ("公主 HP: %d / %d"):format(princessHp.Value, princessMaxHp.Value)
 			princessLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 		end
 	end
@@ -80,15 +85,22 @@ function Hud.create()
 		goldLabel.Text = ("金币: %d"):format(gold.Value)
 	end
 
+	local function refreshTrophies()
+		trophyLabel.Text = ("奖杯: %d"):format(trophies.Value)
+	end
+
 	princessHp.Changed:Connect(refreshPrincess)
+	princessMaxHp.Changed:Connect(refreshPrincess)
 	waveNumber.Changed:Connect(refreshWave)
 	wavePhase.Changed:Connect(refreshWave)
 	waveCountdown.Changed:Connect(refreshWave)
 	gold.Changed:Connect(refreshGold)
+	trophies.Changed:Connect(refreshTrophies)
 
 	refreshPrincess()
 	refreshWave()
 	refreshGold()
+	refreshTrophies()
 end
 
 return Hud

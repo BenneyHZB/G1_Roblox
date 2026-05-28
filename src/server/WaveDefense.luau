@@ -18,6 +18,7 @@
 -- 【场景要求】Workspace.Map 下 Part，Name = "EnemySpawn"（不要放在 Princess 模型内部）
 -- ============================================================================
 
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -51,11 +52,13 @@ local enemyTemplate: Model | BasePart
 local waveEnemiesFolder: Folder
 local spawnPoints: { BasePart } = {}
 local princessHpValue: IntValue
+local princessMaxHpValue: IntValue
 local waveNumberValue: IntValue
 local wavePhaseValue: StringValue
 local waveCountdownValue: IntValue
 
 local activeWaveEnemies = 0
+local princessHitSoundTemplate: Sound?
 
 -- ---------------------------------------------------------------------------
 -- 工具函数
@@ -488,6 +491,7 @@ local function ensureGameState()
 		return value :: StringValue
 	end
 
+	princessMaxHpValue = ensureInt("PrincessMaxHp", GameConfig.PrincessMaxHp)
 	princessHpValue = ensureInt("PrincessHp", GameConfig.PrincessMaxHp)
 	waveNumberValue = ensureInt("WaveNumber", 0)
 	waveCountdownValue = ensureInt("WaveCountdown", 0)
@@ -516,6 +520,63 @@ local function disablePrincessBuiltInUi(princess: Model | BasePart)
 			end
 		end
 	end
+end
+
+local function getPrincessSoundParent(): Instance
+	if princessTarget:IsA("Model") then
+		local part = princessTarget.PrimaryPart
+			or princessTarget:FindFirstChild("HumanoidRootPart", true)
+			or princessTarget:FindFirstChildWhichIsA("BasePart", true)
+		return part or princessTarget
+	end
+	return princessTarget
+end
+
+local function setupPrincessHitSound()
+	local soundName = GameConfig.PrincessHitSoundName or "PrincessHit"
+
+	local existing = princessTarget:FindFirstChild(soundName, true)
+	if existing and existing:IsA("Sound") then
+		princessHitSoundTemplate = existing
+		existing.Looped = false
+		existing.Playing = false
+		print("[WaveDefense] 公主受击音效:", existing:GetFullName())
+		return
+	end
+
+	local soundId = GameConfig.PrincessHitSoundId
+	if typeof(soundId) ~= "string" or soundId == "" then
+		warn(
+			("[WaveDefense] 未找到公主受击 Sound「%s」，请在公主模型里插入 Sound，或设置 GameConfig.PrincessHitSoundId"):format(
+				soundName
+			)
+		)
+		return
+	end
+
+	local parent = getPrincessSoundParent()
+	local sound = Instance.new("Sound")
+	sound.Name = "PrincessHitSoundTemplate"
+	sound.SoundId = soundId
+	sound.Volume = GameConfig.PrincessHitSoundVolume or 0.65
+	sound.RollOffMinDistance = 8
+	sound.RollOffMaxDistance = 120
+	sound.Parent = parent
+	princessHitSoundTemplate = sound
+	print("[WaveDefense] 公主受击音效（配置 ID）:", soundId)
+end
+
+local function playPrincessHitSound()
+	if not princessHitSoundTemplate or not princessHitSoundTemplate.Parent then
+		return
+	end
+
+	local sound = princessHitSoundTemplate:Clone()
+	sound.Parent = princessHitSoundTemplate.Parent
+	sound:Play()
+	sound.Ended:Once(function()
+		sound:Destroy()
+	end)
 end
 
 -- 扫描 Workspace.Map 下所有层级，找 Name = "EnemySpawn" 的 Part
@@ -574,8 +635,89 @@ local function trackWaveEnemy(enemy: Instance)
 	enemy.Destroying:Connect(onRemoved)
 end
 
+local function computePrincessMaxHpBonus(): number
+	local cfg = GameConfig.ShopUpgrades.PrincessMaxHp
+	if not cfg then
+		return 0
+	end
+
+	local total = 0
+	for _, player in Players:GetPlayers() do
+		local level = player:GetAttribute("ShopLevel_PrincessMaxHp")
+		if typeof(level) == "number" then
+			total += math.max(0, math.floor(level)) * cfg.BonusPerLevel
+		end
+	end
+	return total
+end
+
+function WaveDefense.getPrincessMaxHp(): number
+	if princessMaxHpValue then
+		return princessMaxHpValue.Value
+	end
+	return GameConfig.PrincessMaxHp + computePrincessMaxHpBonus()
+end
+
+function WaveDefense.recalculatePrincessMaxHp()
+	if not princessMaxHpValue or not princessHpValue then
+		return
+	end
+
+	local newMax = GameConfig.PrincessMaxHp + computePrincessMaxHpBonus()
+	local oldMax = princessMaxHpValue.Value
+	princessMaxHpValue.Value = newMax
+
+	if newMax > oldMax then
+		princessHpValue.Value = math.min(princessHpValue.Value + (newMax - oldMax), newMax)
+	else
+		princessHpValue.Value = math.min(princessHpValue.Value, newMax)
+	end
+end
+
+function WaveDefense.addPrincessMaxHp(amount: number)
+	if not princessMaxHpValue or not princessHpValue or amount <= 0 then
+		return
+	end
+
+	princessMaxHpValue.Value += amount
+	princessHpValue.Value = math.min(princessHpValue.Value + amount, princessMaxHpValue.Value)
+end
+
+function WaveDefense.healPrincess(player: Player): (boolean, string)
+	local healCfg = GameConfig.ShopPrincessHeal
+	if not princessHpValue or not princessMaxHpValue then
+		return false, "游戏未开始"
+	end
+	if princessHpValue.Value <= 0 then
+		return false, "公主已失守"
+	end
+
+	local maxHp = princessMaxHpValue.Value
+	if princessHpValue.Value >= maxHp then
+		return false, "公主生命已满"
+	end
+
+	local readyAt = player:GetAttribute("PrincessHealReadyAt")
+	if typeof(readyAt) == "number" then
+		local remaining = readyAt - workspace:GetServerTimeNow()
+		if remaining > 0 then
+			return false, ("冷却中 %d 秒"):format(math.ceil(remaining))
+		end
+	end
+
+	local before = princessHpValue.Value
+	princessHpValue.Value = math.min(princessHpValue.Value + healCfg.HealAmount, maxHp)
+	local healed = princessHpValue.Value - before
+
+	player:SetAttribute("PrincessHealReadyAt", workspace:GetServerTimeNow() + healCfg.Cooldown)
+
+	return true, ("已恢复 %d 生命"):format(healed)
+end
+
 -- 扣公主 HP；HP 归零时标记游戏结束
 local function damagePrincess(amount: number)
+	playPrincessHitSound()
+
 	princessHpValue.Value = math.max(0, princessHpValue.Value - amount)
 	if princessHpValue.Value <= 0 then
 		wavePhaseValue.Value = "Defeated"
@@ -812,6 +954,19 @@ local function getWaveEnemyCount(waveNumber: number): number
 	return GameConfig.WaveBaseEnemyCount + (waveNumber - 1) * GameConfig.WaveEnemyCountPerWave
 end
 
+-- 下一波开始前的等待：第 1 波用 FirstWaveDelay，之后从 WaveIntermissionStart 渐增至 WaveIntermissionEnd
+local function getIntermissionBeforeWave(waveToStart: number): number
+	if waveToStart <= 1 then
+		return GameConfig.FirstWaveDelay
+	end
+
+	local startSec = GameConfig.WaveIntermissionStart
+	local endSec = GameConfig.WaveIntermissionEnd
+	local rampSteps = math.max(1, GameConfig.WaveIntermissionRampWaves - 1)
+	local t = math.clamp((waveToStart - 2) / rampSteps, 0, 1)
+	return math.floor(startSec + (endSec - startSec) * t + 0.5)
+end
+
 -- 调用方：start 波次循环
 local function runIntermission(seconds: number): boolean
 	wavePhaseValue.Value = "Intermission"
@@ -868,12 +1023,14 @@ function WaveDefense.setupWorld()
 	waveEnemiesFolder = ensureWaveEnemiesFolder()
 	clearStrayEnemies()
 
-	princessHpValue.Value = GameConfig.PrincessMaxHp
+	princessMaxHpValue.Value = GameConfig.PrincessMaxHp + computePrincessMaxHpBonus()
+	princessHpValue.Value = princessMaxHpValue.Value
 	waveNumberValue.Value = 0
-	waveCountdownValue.Value = GameConfig.WaveIntermission
+	waveCountdownValue.Value = GameConfig.FirstWaveDelay
 	wavePhaseValue.Value = "Intermission"
 
 	findMapObjects()
+	setupPrincessHitSound()
 
 	print(
 		"[WaveDefense] 已绑定：公主 +",
@@ -901,11 +1058,11 @@ function WaveDefense.start()
 		local waveNumber = 0
 
 		while princessHpValue.Value > 0 do
-			if not runIntermission(GameConfig.WaveIntermission) then
+			waveNumber += 1
+			local waitSec = getIntermissionBeforeWave(waveNumber)
+			if not runIntermission(waitSec) then
 				break
 			end
-
-			waveNumber += 1
 			if not runWave(waveNumber) then
 				break
 			end

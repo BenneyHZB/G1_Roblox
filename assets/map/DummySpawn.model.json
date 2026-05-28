@@ -1,0 +1,12 @@
+{
+  "className": "Part",
+  "properties": {
+    "Name": "DummySpawn",
+    "Anchored": true,
+    "CanCollide": false,
+    "Transparency": 0.6,
+    "Size": [4, 0.5, 4],
+    "Position": [10, 0, -34],
+    "Color": [0.4, 0.8, 1]
+  }
+}

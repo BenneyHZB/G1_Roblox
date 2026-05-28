@@ -8,6 +8,9 @@
       },
       "EnemyTemplate": {
         "$path": "assets/templates/EnemyTemplate.rbxm"
+      },
+      "TrainingDummyTemplate": {
+        "$path": "assets/templates/TrainingDummy.rbxm"
       }
     },
     "ServerScriptService": {
