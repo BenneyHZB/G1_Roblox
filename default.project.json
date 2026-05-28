@@ -5,6 +5,9 @@
     "ReplicatedStorage": {
       "Shared": {
         "$path": "src/shared"
+      },
+      "EnemyTemplate": {
+        "$path": "assets/templates/EnemyTemplate.rbxm"
       }
     },
     "ServerScriptService": {
@@ -21,7 +24,10 @@
     },
     "Workspace": {
       "Map": {
-        "$path": "assets/map"
+        "$path": "assets/map",
+        "Weapons": {
+          "$path": "assets/weapons"
+        }
       }
     }
   }

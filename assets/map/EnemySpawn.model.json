@@ -4,7 +4,7 @@
     "Name": "EnemySpawn",
     "Anchored": true,
     "Size": [2, 1, 2],
-    "Position": [40, 4, 0],
+    "Position": [152, 0.5, 26],
     "Color": [1, 0.667, 0]
   }
 }

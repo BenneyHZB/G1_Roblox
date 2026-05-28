@@ -1,16 +1,30 @@
 -- ============================================================================
--- Server 入口（ServerScriptService.Server）
--- Rojo 会把同目录下的 init.server.luau 变成 Script，其它 .luau 变成它的子 Module
--- 所以 require 用 script.Xxx，不是 script.Parent.Xxx
+-- Server 入口
+--
+-- 【启动顺序】
+--   PlayerEconomy.start()  → 玩家金币 leaderstats
+--   PlayerCombat.start()   → 左键攻击 RemoteEvent（Combat.client 触发）
+--   WaveDefense.start()    → 波次刷怪主循环
 -- ============================================================================
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local CityDefense = require(script.CityDefense)
+local PlayerEconomy = require(script.PlayerEconomy)
+local PlayerCombat = require(script.PlayerCombat)
+local WaveDefense = require(script.WaveDefense)
+
+local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
 
 print("[roblox-starter] Server started")
 
-CityDefense.start()
+PlayerEconomy.start()
+PlayerCombat.start()
+WaveDefense.start()
 
-local GameConfig = require(ReplicatedStorage.Shared.GameConfig)
-print("[roblox-starter] 守城演示已启动：每", GameConfig.EnemySpawnInterval, "秒刷怪")
+print(
+	"[roblox-starter] 波次守公主已启动：波间",
+	GameConfig.WaveIntermission,
+	"秒，击杀 +",
+	GameConfig.GoldPerWaveEnemyKill,
+	"金币"
+)
